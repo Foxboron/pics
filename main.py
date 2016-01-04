@@ -1,6 +1,7 @@
 #!/bin/env python3
 import subprocess
 import glob
+import shlex
 import cmd as cmdPrompt
 
 
@@ -16,30 +17,38 @@ ssh = "trinity"
 options = {"rsync": "rsync",
            "flags": "-HPavzc",
            "path": "./www/pics/albums",
-           "shell": "./bin/rsync-pics",
+           "hook": "./bin/rsync-pics",
            "includes": ["*/"],
            "excludes": ["*"],
            "ssh": "trinity",
            "folder": "",
-           "local_path":"~/Media/6364-66352/DCIM/101CANON/*.JPG"}
+           "local_path":"/home/fox/Media/6364-66352/DCIM/101CANON/*.JPG"}
 
-local_path="~/Media/6364-66352/DCIM/101CANON/*.JPG"
+local_path="/home/fox/Media/6364-66352/DCIM/101CANON/*.JPG"
 remote_path="./www/pics/albums"
-rsync="rsync -HPavzc --rsync-path=\"./bin/rsync-pics\" ~/Media/6364-66352/DCIM/101CANON/*.JPG trinity:./www/pics/albums/$1"
+rsync="rsync -RHPavzc --no-implied-dirs --rsync-path=\"./bin/rsync-pics\" ~/Media/6364-66352/DCIM/101CANON/*.JPG trinity:./www/pics/albums/$1"
 
 
 def create_flags(flag, items):
     ret = ""
     for i in items:
-        ret += "--{0}=\"{1}\" ".format(flag, i)
+        ret += "--{0}=\"{1}\" ".format(flag, i.split("/")[-1])
     return ret
 
 
-
 def construct_rsync(rsync):
-    rsync["includes"] = create_flags("includes", rsync["includes"])
-    rsync["excludes"] = create_flags("excludes", rsync["excludes"])
-    return "{rsync} {flags} --rsync-path=\"{shell}\" {includes} {excludes} {local} {ssh}:{remote}/{folder}".format(**rsync, local=local_path, remote=remote_path)
+    shell = ""
+    folder = ""
+    rsync["includes"] = create_flags("include", rsync["includes"])
+    rsync["excludes"] = create_flags("exclude", rsync["excludes"])
+    if rsync["hook"]:
+        shell = rsync["hook"]
+        if rsync["folder"]:
+            shell = "mkdir -p {path}/{folder} && ".format(path=rsync["path"],folder=rsync["folder"]) + shell
+        shell = "--rsync-path=\"{shell}\"".format(shell=shell)
+    ret = "{rsync} {flags} {shell} {includes} {excludes} {local} {ssh}:{remote}/{folder}".format(**rsync, shell=shell, local=local_path, remote=remote_path)
+    return ret
+
 
 def ranges(numbers):
     r = []
@@ -59,8 +68,10 @@ def ranges(numbers):
                 r.append(nn)
     return r
 
+
 def print_ranges(r):
     return ",".join("-".join(str(nn) for nn in i) if isinstance(i,tuple) else str(i) for i in r)
+
 
 def expand_files(args):
     ret = []
@@ -70,6 +81,7 @@ def expand_files(args):
         elif not isinstance(i,int):
             ret.append(i)
     return ret
+
 
 def expand(args):
     def _expand(x):
@@ -82,7 +94,6 @@ def expand(args):
             return [int(l[0])]
         else:
             return [l[0]]
-
     ret = []
     for i in args:
         ret.extend(_expand(i))
@@ -91,22 +102,21 @@ def expand(args):
 
 
 _commands = {}
-
-
 def cmd(name):
     def _(fn):
         _commands[name] = fn
     return _
 
+
 @cmd("?")
 def help(args):
-    return """
+    print ("""
 v - view image
 c - create album
 b - batch commands
 u - upload (maybe current batch?)
 l - list files
-"""
+""")
 
 
 @cmd("q")
@@ -123,7 +133,6 @@ def list_files(args):
 def view_pic(args):
     mode = None
     if "ascii" in args: mode, *args = args
-    print(mode)
     if mode == "ascii":
         for i in args:
             output = subprocess.run(["img2txt", i], stderr=subprocess.PIPE)
@@ -150,10 +159,20 @@ def upload_pics(args):
     folder, *pics = args
     options["folder"] = folder
     options["excludes"] = ["*"]
-    options["includes"] = args
+    options["includes"].extend(pics)
     cmd = construct_rsync(options)
-    print(cmd)
+    output = subprocess.run(cmd, shell=True)
     return None
+
+
+@cmd("r")
+def display_ranges(args):
+    print(print_ranges(ranges(sorted(list(files.keys())))))
+
+
+@cmd("o")
+def display_options(args):
+    print(options)
 
 
 class PicsShell(cmdPrompt.Cmd):
@@ -162,7 +181,6 @@ class PicsShell(cmdPrompt.Cmd):
     file = None
 
     def onecmd(self, s):
-        print(s)
         cmd, *args = s.split(" ")
         args = expand(args)
         if cmd in _commands.keys():
